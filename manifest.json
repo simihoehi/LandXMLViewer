@@ -1,0 +1,14 @@
+{
+  "name": "LandXML Geländeviewer",
+  "short_name": "Geländeviewer",
+  "description": "LandXML-Oberflächen (TIN) direkt im Browser ansehen.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#14171b",
+  "theme_color": "#1b1f24",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

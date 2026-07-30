@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1b1f24">
+<meta name="description" content="LandXML Geländemodell (TIN) direkt im Browser ansehen – auch offline, auch am Handy.">
+<title>LandXML Geländeviewer</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<style>
+  :root{
+    --bg: #14171b;
+    --panel: #1b1f24;
+    --panel-2: #21262d;
+    --line: #2c333b;
+    --text: #e8ebee;
+    --text-dim: #9aa4ae;
+    --accent: #f2a900; /* Baustellen-Orange/Gelb */
+    --accent-2: #4fb3bf; /* kühles Blau-Grün fürs Höhen-Farbschema */
+    --danger: #e5533d;
+    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans);
+  }
+  #app { position: fixed; inset: 0; }
+  #canvasHolder { position: absolute; inset: 0; }
+  canvas { display: block; touch-action: none; }
+
+  /* Top bar */
+  #topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    background: linear-gradient(to bottom, rgba(20,23,27,0.92), rgba(20,23,27,0));
+    z-index: 20; pointer-events: none;
+  }
+  #topbar > * { pointer-events: auto; }
+  .brand {
+    display: flex; flex-direction: column; line-height: 1.1; margin-right: auto;
+  }
+  .brand b { font-size: 14px; letter-spacing: 0.02em; }
+  .brand span { font-size: 11px; color: var(--text-dim); font-family: var(--mono); }
+
+  button, .btn {
+    appearance: none; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--text); font-family: var(--sans); font-size: 13px; font-weight: 600;
+    padding: 9px 12px; border-radius: 10px; cursor: pointer; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--accent); color: #1a1300; border-color: var(--accent); }
+  button.icon { padding: 9px 10px; }
+  input[type=file] { display: none; }
+
+  /* Bottom sheet */
+  #sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 24px rgba(0,0,0,0.35);
+    z-index: 25;
+    max-height: 68vh;
+    transform: translateY(calc(100% - 46px));
+    transition: transform .25s ease;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  #sheet.open { transform: translateY(0); }
+  #sheetHandle {
+    display: flex; align-items: center; justify-content: center;
+    padding: 10px; cursor: pointer; gap: 8px;
+  }
+  #sheetHandle .bar { width: 36px; height: 4px; border-radius: 2px; background: var(--line); }
+  #sheetHandle .label { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  #sheetBody { overflow-y: auto; max-height: calc(68vh - 46px); padding: 4px 16px 16px; }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: none; }
+  .row label { font-size: 13px; color: var(--text-dim); }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; background: var(--panel-2); font-weight: 500; }
+  .seg button.active { background: var(--accent); color: #1a1300; }
+
+  .statgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-top: 6px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .stat .k { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-family: var(--mono); font-size: 14px; margin-top: 2px; }
+
+  h3.section { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); margin: 14px 0 4px; }
+
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 8px; font-family: var(--sans); font-size: 13px;
+  }
+
+  /* Legend */
+  #legend {
+    position: absolute; right: 12px; bottom: 60px; z-index: 15;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    display: none;
+  }
+  #legend.show { display: block; }
+  #legendBar { width: 12px; height: 110px; border-radius: 4px; margin: 4px auto;
+    background: linear-gradient(to top, #2b6cb0, #38a169, #d69e2e, #c05621, #f7fafc); }
+  #legend .lbl { text-align: center; }
+
+  /* Empty state */
+  #empty {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; text-align: center; padding: 24px; z-index: 5;
+  }
+  #empty h1 { font-size: 20px; margin: 0; }
+  #empty p { color: var(--text-dim); font-size: 13.5px; max-width: 320px; margin: 0; line-height: 1.5; }
+  #empty .tag { font-family: var(--mono); font-size: 11px; color: var(--accent-2); letter-spacing: .04em; }
+
+  #loading {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(20,23,27,0.75); z-index: 30; font-family: var(--mono); font-size: 13px;
+  }
+  #loading.show { display: flex; }
+
+  #toast {
+    position: absolute; left: 50%; top: 70px; transform: translateX(-50%);
+    background: var(--danger); color: #fff; font-size: 13px; padding: 10px 14px;
+    border-radius: 10px; z-index: 40; display: none; max-width: 86vw; text-align: center;
+  }
+  #toast.show { display: block; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="canvasHolder"></div>
+
+  <div id="empty">
+    <span class="tag">TIN (Triangulated Irregular Network / dreiecksvermaschtes Geländemodell)</span>
+    <h1>LandXML Geländeviewer</h1>
+    <p>Lade eine LandXML-Datei (.xml) mit einer Surface (Oberfläche) – z. B. den Export aus deiner GNSS-Bagger-Steuerung oder Vermessungssoftware.</p>
+    <button class="primary" id="emptyLoadBtn">Datei öffnen</button>
+  </div>
+
+  <div id="topbar">
+    <div class="brand">
+      <b>Geländeviewer</b>
+      <span id="brandSub">kein Modell geladen</span>
+    </div>
+    <button class="icon" id="loadBtn" title="LandXML-Datei laden">📂</button>
+    <button class="icon" id="resetViewBtn" title="Ansicht zurücksetzen">⤾</button>
+  </div>
+
+  <div id="legend"><div class="lbl" id="legendMax">–</div><div id="legendBar"></div><div class="lbl" id="legendMin">–</div></div>
+
+  <div id="sheet">
+    <div id="sheetHandle"><div class="bar"></div><div class="label" id="sheetLabel">Details &amp; Einstellungen</div></div>
+    <div id="sheetBody">
+
+      <h3 class="section">Oberfläche (Surface)</h3>
+      <div class="row"><label>Auswahl</label><select id="surfaceSelect"><option>–</option></select></div>
+      <div class="statgrid">
+        <div class="stat"><div class="k">Punkte</div><div class="v" id="statPts">–</div></div>
+        <div class="stat"><div class="k">Dreiecke</div><div class="v" id="statFaces">–</div></div>
+        <div class="stat"><div class="k">Höhe min</div><div class="v" id="statZmin">–</div></div>
+        <div class="stat"><div class="k">Höhe max</div><div class="v" id="statZmax">–</div></div>
+        <div class="stat"><div class="k">Grundfläche (2D)</div><div class="v" id="statArea">–</div></div>
+        <div class="stat"><div class="k">Einheit (aus Datei)</div><div class="v" id="statUnit">–</div></div>
+      </div>
+
+      <h3 class="section">Darstellung</h3>
+      <div class="row">
+        <label>Farbmodus</label>
+        <div class="seg" id="colorModeSeg">
+          <button data-v="elevation" class="active">Höhe</button>
+          <button data-v="solid">Einfarbig</button>
+        </div>
+      </div>
+      <div class="row">
+        <label>Drahtgitter (Dreieckskanten)</label>
+        <div class="seg" id="wireSeg">
+          <button data-v="off" class="active">Aus</button>
+          <button data-v="on">An</button>
+        </div>
+      </div>
+      <div class="row">
+        <label>Punktreihenfolge in &lt;P&gt;</label>
+        <div class="seg" id="orderSeg">
+          <button data-v="NEZ" class="active">Rechtswert/Hochwert (Standard N,E,Z)</button>
+          <button data-v="ENZ">Hochwert/Rechtswert (E,N,Z)</button>
+        </div>
+      </div>
+
+      <h3 class="section">Hinweis (Genauigkeit)</h3>
+      <p style="font-size:12px; color:var(--text-dim); line-height:1.5; margin:4px 0 0;">
+        Die LandXML-Spezifikation (Norm/Standard-Dokument für den Datenaustausch) sieht als Standard-Reihenfolge der Koordinaten in &lt;P&gt; „Hochwert, Rechtswert, Höhe" (Northing, Easting, Elevation) vor. Manche Export-Programme weichen davon ab. Wenn das Modell verzerrt/gespiegelt wirkt, oben auf „Hochwert/Rechtswert (E,N,Z)" umschalten.
+      </p>
+    </div>
+  </div>
+
+  <div id="loading">Lese LandXML …</div>
+  <div id="toast"></div>
+  <input type="file" id="fileInput" accept=".xml,text/xml,application/xml">
+</div>
+
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+
+// ---------- DOM ----------
+const els = {
+  empty: document.getElementById('empty'),
+  topbar: document.getElementById('topbar'),
+  brandSub: document.getElementById('brandSub'),
+  loadBtn: document.getElementById('loadBtn'),
+  emptyLoadBtn: document.getElementById('emptyLoadBtn'),
+  resetViewBtn: document.getElementById('resetViewBtn'),
+  fileInput: document.getElementById('fileInput'),
+  sheet: document.getElementById('sheet'),
+  sheetHandle: document.getElementById('sheetHandle'),
+  sheetLabel: document.getElementById('sheetLabel'),
+  surfaceSelect: document.getElementById('surfaceSelect'),
+  statPts: document.getElementById('statPts'),
+  statFaces: document.getElementById('statFaces'),
+  statZmin: document.getElementById('statZmin'),
+  statZmax: document.getElementById('statZmax'),
+  statArea: document.getElementById('statArea'),
+  statUnit: document.getElementById('statUnit'),
+  colorModeSeg: document.getElementById('colorModeSeg'),
+  wireSeg: document.getElementById('wireSeg'),
+  orderSeg: document.getElementById('orderSeg'),
+  legend: document.getElementById('legend'),
+  legendMin: document.getElementById('legendMin'),
+  legendMax: document.getElementById('legendMax'),
+  loading: document.getElementById('loading'),
+  toast: document.getElementById('toast'),
+  canvasHolder: document.getElementById('canvasHolder'),
+};
+
+let toastTimer = null;
+function showToast(msg) {
+  els.toast.textContent = msg;
+  els.toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 4200);
+}
+
+// ---------- Sheet toggle ----------
+let sheetOpen = false;
+function setSheet(open) {
+  sheetOpen = open;
+  els.sheet.classList.toggle('open', open);
+}
+els.sheetHandle.addEventListener('click', () => setSheet(!sheetOpen));
+
+// ---------- Segmented controls ----------
+function wireSeg(container, onChange) {
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    [...container.children].forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    onChange(btn.dataset.v);
+  });
+}
+
+// ---------- Three.js setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14171b);
+scene.fog = new THREE.Fog(0x14171b, 200, 4000);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100000);
+camera.position.set(120, 90, 120);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+els.canvasHolder.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true;
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x1a1500, 0.9);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(1, 1.4, 0.6);
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0x88aabb, 0.35);
+fill.position.set(-1, 0.6, -0.8);
+scene.add(fill);
+
+let gridHelper = null;
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- LandXML parsing ----------
+// Robust gegen XML-Namespaces: sucht per lokalem Elementnamen statt per Tag-Prefix.
+function byLocalName(root, name) {
+  const all = root.getElementsByTagName('*');
+  const out = [];
+  for (let i = 0; i < all.length; i++) {
+    if (all[i].localName === name) out.push(all[i]);
+  }
+  return out;
+}
+
+function parseLandXML(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  const perr = doc.getElementsByTagName('parsererror');
+  if (perr.length) {
+    throw new Error('Die Datei ist kein gültiges XML (Parserfehler).');
+  }
+
+  // Einheit, falls angegeben (<Units><Metric .../> oder <Units><Imperial .../>)
+  let unit = 'unbekannt';
+  const unitsEl = byLocalName(doc, 'Units')[0];
+  if (unitsEl) {
+    const metric = byLocalName(unitsEl, 'Metric')[0];
+    const imperial = byLocalName(unitsEl, 'Imperial')[0];
+    if (metric) unit = metric.getAttribute('linearUnit') || 'meter';
+    else if (imperial) unit = imperial.getAttribute('linearUnit') || 'foot (US survey)';
+  }
+
+  const surfaceEls = byLocalName(doc, 'Surface');
+  if (surfaceEls.length === 0) {
+    throw new Error('Keine <Surface> (Oberfläche/TIN) in dieser LandXML-Datei gefunden.');
+  }
+
+  const surfaces = [];
+  for (const surfEl of surfaceEls) {
+    const name = surfEl.getAttribute('name') || `Surface ${surfaces.length + 1}`;
+    const defEl = byLocalName(surfEl, 'Definition')[0];
+    if (!defEl) continue;
+
+    const pntsContainer = byLocalName(defEl, 'Pnts')[0];
+    const facesContainer = byLocalName(defEl, 'Faces')[0];
+    if (!pntsContainer || !facesContainer) continue;
+
+    const points = new Map(); // id(string) -> [a, b, z]  (a,b noch in Roh-Reihenfolge lt. Datei)
+    const pEls = byLocalName(pntsContainer, 'P');
+    for (const p of pEls) {
+      const id = p.getAttribute('id');
+      const nums = p.textContent.trim().split(/\s+/).map(Number);
+      if (nums.length >= 3 && id != null) {
+        points.set(id, [nums[0], nums[1], nums[2]]);
+      }
+    }
+
+    const faces = [];
+    const fEls = byLocalName(facesContainer, 'F');
+    for (const f of fEls) {
+      const nums = f.textContent.trim().split(/\s+/).slice(0, 3);
+      if (nums.length === 3) faces.push(nums);
+    }
+
+    if (points.size && faces.length) {
+      surfaces.push({ name, points, faces });
+    }
+  }
+
+  if (surfaces.length === 0) {
+    throw new Error('In der Datei wurden Surfaces gefunden, aber keine davon enthält sowohl Punkte als auch Dreiecke (Faces).');
+  }
+
+  return { surfaces, unit };
+}
+
+// ---------- Geometry building ----------
+// order: 'NEZ' -> Datei liefert [Hochwert(N), Rechtswert(E), Höhe(Z)]  (LandXML-Standard)
+// order: 'ENZ' -> Datei liefert [Rechtswert(E), Hochwert(N), Höhe(Z)]
+function buildMeshData(surface, order) {
+  const idToIndex = new Map();
+  const positions = [];
+  let idx = 0;
+  let minZ = Infinity, maxZ = -Infinity;
+  let minE = Infinity, maxE = -Infinity, minN = Infinity, maxN = -Infinity;
+
+  for (const [id, raw] of surface.points) {
+    let E, N, Z;
+    if (order === 'NEZ') { N = raw[0]; E = raw[1]; Z = raw[2]; }
+    else { E = raw[0]; N = raw[1]; Z = raw[2]; }
+    positions.push(E, N, Z); // vorerst Rohkoordinaten, three.js-Achsen unten gemappt
+    idToIndex.set(id, idx++);
+    if (Z < minZ) minZ = Z; if (Z > maxZ) maxZ = Z;
+    if (E < minE) minE = E; if (E > maxE) maxE = E;
+    if (N < minN) minN = N; if (N > maxN) maxN = N;
+  }
+
+  const indices = [];
+  let skipped = 0;
+  for (const f of surface.faces) {
+    const a = idToIndex.get(f[0]), b = idToIndex.get(f[1]), c = idToIndex.get(f[2]);
+    if (a === undefined || b === undefined || c === undefined) { skipped++; continue; }
+    indices.push(a, b, c);
+  }
+
+  return { positions, indices, minZ, maxZ, minE, maxE, minN, maxN, skipped, pointCount: idToIndex.size };
+}
+
+function elevationColor(t) {
+  // t in [0,1] – Terrain-Farbverlauf: Blau -> Grün -> Gelb/Ocker -> Braun -> Weiß
+  const stops = [
+    [0.00, 0x2b6cb0],
+    [0.30, 0x38a169],
+    [0.55, 0xd69e2e],
+    [0.78, 0xc05621],
+    [1.00, 0xf7fafc],
+  ];
+  let i = 0;
+  while (i < stops.length - 2 && t > stops[i + 1][0]) i++;
+  const [t0, c0] = stops[i], [t1, c1] = stops[i + 1];
+  const f = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+  const col0 = new THREE.Color(c0), col1 = new THREE.Color(c1);
+  return col0.clone().lerp(col1, Math.max(0, Math.min(1, f)));
+}
+
+let currentMesh = null;
+let currentWire = null;
+let currentGeomData = null;
+let colorMode = 'elevation';
+let wireOn = false;
+
+function clearScene3D() {
+  if (currentMesh) { scene.remove(currentMesh); currentMesh.geometry.dispose(); currentMesh.material.dispose(); currentMesh = null; }
+  if (currentWire) { scene.remove(currentWire); currentWire.geometry.dispose(); currentWire.material.dispose(); currentWire = null; }
+  if (gridHelper) { scene.remove(gridHelper); gridHelper = null; }
+}
+
+function renderSurface(surface, order) {
+  clearScene3D();
+  const data = buildMeshData(surface, order);
+  currentGeomData = data;
+
+  if (data.skipped > 0) {
+    showToast(`${data.skipped} Dreieck(e) verweisen auf unbekannte Punkt-IDs und wurden übersprungen.`);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  const posArr = new Float32Array(data.positions.length);
+
+  // Zentrieren in der Ebene (E/N), Höhe unverändert lassen (für echte Kotenwerte in der Legende).
+  const cx = (data.minE + data.maxE) / 2;
+  const cz = (data.minN + data.maxN) / 2;
+
+  // Mapping auf three.js-Achsen: three.js Y = vertikal (Höhe), X = Rechtswert(E), Z = -Hochwert(N)
+  for (let i = 0; i < data.positions.length; i += 3) {
+    const E = data.positions[i], N = data.positions[i + 1], Z = data.positions[i + 2];
+    posArr[i] = E - cx;
+    posArr[i + 1] = Z;
+    posArr[i + 2] = -(N - cz);
+  }
+  geometry.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  geometry.setIndex(data.indices);
+  geometry.computeVertexNormals();
+
+  // Farben nach Höhe
+  const colors = new Float32Array((posArr.length));
+  const zRange = Math.max(1e-6, data.maxZ - data.minZ);
+  for (let i = 0; i < posArr.length; i += 3) {
+    const z = posArr[i + 1];
+    const t = (z - data.minZ) / zRange;
+    const c = elevationColor(t);
+    colors[i] = c.r; colors[i + 1] = c.g; colors[i + 2] = c.b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const material = new THREE.MeshStandardMaterial({
+    vertexColors: colorMode === 'elevation',
+    color: colorMode === 'elevation' ? 0xffffff : 0x6b7a8a,
+    metalness: 0.05,
+    roughness: 0.85,
+    side: THREE.DoubleSide,
+    flatShading: false,
+  });
+
+  currentMesh = new THREE.Mesh(geometry, material);
+  scene.add(currentMesh);
+
+  if (wireOn) addWireframe(geometry);
+
+  // Kamera auf Modell einpassen
+  const sizeE = data.maxE - data.minE;
+  const sizeN = data.maxN - data.minN;
+  const sizeZ = data.maxZ - data.minZ;
+  const planDiag = Math.sqrt(sizeE * sizeE + sizeN * sizeN) || 10;
+  const dist = Math.max(planDiag, sizeZ * 2, 10) * 1.15;
+  camera.position.set(dist * 0.6, dist * 0.55 + sizeZ, dist * 0.6);
+  controls.target.set(0, (data.minZ + data.maxZ) / 2 - data.minZ, 0);
+  // Höhe des Modells beginnt bei posArr Y = Z (nicht zentriert) -> Ziel etwas über Boden legen
+  controls.target.set(0, sizeZ / 2, 0);
+  camera.near = Math.max(0.01, dist / 2000);
+  camera.far = dist * 50;
+  camera.updateProjectionMatrix();
+  controls.update();
+
+  gridHelper = new THREE.GridHelper(Math.max(planDiag * 1.4, 20), 20, 0x2c333b, 0x21262d);
+  gridHelper.position.y = 0;
+  scene.add(gridHelper);
+
+  // UI aktualisieren
+  els.statPts.textContent = data.pointCount.toLocaleString('de-DE');
+  els.statFaces.textContent = surface.faces.length.toLocaleString('de-DE');
+  els.statZmin.textContent = data.minZ.toFixed(3);
+  els.statZmax.textContent = data.maxZ.toFixed(3);
+  els.legendMin.textContent = data.minZ.toFixed(2);
+  els.legendMax.textContent = data.maxZ.toFixed(2);
+  els.legend.classList.toggle('show', colorMode === 'elevation');
+
+  const area = planarArea(data);
+  els.statArea.textContent = area >= 10000
+    ? (area / 10000).toLocaleString('de-DE', { maximumFractionDigits: 2 }) + ' ha'
+    : area.toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' m²';
+}
+
+function planarArea(data) {
+  // Näherungsweise 2D-Grundfläche über die Dreiecke (nur korrekt, wenn die Datei-Einheit Meter ist).
+  let sum = 0;
+  const pos = currentMesh ? currentMesh.geometry.attributes.position.array : null;
+  if (!pos) return 0;
+  const idx = currentMesh.geometry.index.array;
+  for (let i = 0; i < idx.length; i += 3) {
+    const ia = idx[i] * 3, ib = idx[i + 1] * 3, ic = idx[i + 2] * 3;
+    const ax = pos[ia], az = pos[ia + 2];
+    const bx = pos[ib], bz = pos[ib + 2];
+    const cx = pos[ic], cz = pos[ic + 2];
+    sum += Math.abs((bx - ax) * (cz - az) - (cx - ax) * (bz - az)) / 2;
+  }
+  return sum;
+}
+
+function addWireframe(geometry) {
+  const wf = new THREE.WireframeGeometry(geometry);
+  const mat = new THREE.LineBasicMaterial({ color: 0x0d1013, transparent: true, opacity: 0.35 });
+  currentWire = new THREE.LineSegments(wf, mat);
+  scene.add(currentWire);
+}
+
+// ---------- App state ----------
+let parsedData = null; // { surfaces, unit }
+let coordOrder = 'NEZ';
+
+function loadSelectedSurface() {
+  const i = Number(els.surfaceSelect.value);
+  const surface = parsedData.surfaces[i];
+  els.statUnit.textContent = parsedData.unit;
+  renderSurface(surface, coordOrder);
+}
+
+function handleFile(file) {
+  els.loading.classList.add('show');
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      parsedData = parseLandXML(reader.result);
+      els.empty.style.display = 'none';
+      els.brandSub.textContent = file.name;
+      els.surfaceSelect.innerHTML = '';
+      parsedData.surfaces.forEach((s, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = `${s.name} (${s.points.size} Pkt., ${s.faces.length} Drk.)`;
+        els.surfaceSelect.appendChild(opt);
+      });
+      loadSelectedSurface();
+      setSheet(true);
+    } catch (err) {
+      showToast(err.message || 'Datei konnte nicht gelesen werden.');
+    } finally {
+      els.loading.classList.remove('show');
+    }
+  };
+  reader.onerror = () => {
+    els.loading.classList.remove('show');
+    showToast('Datei konnte nicht gelesen werden.');
+  };
+  reader.readAsText(file);
+}
+
+// ---------- Events ----------
+els.loadBtn.addEventListener('click', () => els.fileInput.click());
+els.emptyLoadBtn.addEventListener('click', () => els.fileInput.click());
+els.fileInput.addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (f) handleFile(f);
+  els.fileInput.value = '';
+});
+els.resetViewBtn.addEventListener('click', () => {
+  if (parsedData) loadSelectedSurface();
+});
+els.surfaceSelect.addEventListener('change', loadSelectedSurface);
+
+wireSeg(els.colorModeSeg, (v) => {
+  colorMode = v;
+  if (parsedData) loadSelectedSurface();
+});
+wireSeg(els.wireSeg, (v) => {
+  wireOn = v === 'on';
+  if (parsedData) loadSelectedSurface();
+});
+wireSeg(els.orderSeg, (v) => {
+  coordOrder = v;
+  if (parsedData) loadSelectedSurface();
+});
+
+// Drag & drop (Desktop-Komfort)
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+
+// Service Worker für Offline-Nutzung (falls über HTTPS/GitHub Pages ausgeliefert)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
